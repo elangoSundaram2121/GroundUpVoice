@@ -1,0 +1,16 @@
+{
+  "name": "groundup-voice",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal voice reporting prototype with OpenAI Whisper transcription.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "latest",
+    "express": "latest",
+    "multer": "latest",
+    "openai": "latest"
+  }
+}
