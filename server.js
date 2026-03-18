@@ -201,6 +201,18 @@ function normalizeData(data) {
   };
 }
 
+app.get("/records", (_req, res) => {
+  try {
+    const records = safeReadTranscriptFile();
+    return res.json(records);
+  } catch (error) {
+    console.error("Failed to read saved records:", error);
+    return res.status(500).json({
+      error: "Failed to read saved records."
+    });
+  }
+});
+
 app.post("/upload", upload.single("audio"), async (req, res) => {
   console.log("Received /upload request");
 
