@@ -101,7 +101,11 @@ function parseNumberWithUnits(value) {
     return value;
   }
 
-  const input = String(value).toLowerCase().replace(/,/g, " ").trim();
+  let input = String(value).toLowerCase().trim();
+  input = input.replace(/,/g, "");
+  while (/\d\s+\d{3}\b/.test(input)) {
+    input = input.replace(/(\d)\s+(\d{3}\b)/g, "$1$2");
+  }
   const match = input.match(/(\d+(?:\.\d+)?)\s*(k|thousand|lac|lakh)?/);
 
   if (!match) {
@@ -132,7 +136,11 @@ function extractRateRange(rateRaw) {
     return { rate_min: null, rate_max: null };
   }
 
-  const input = String(rateRaw).toLowerCase().replace(/,/g, " ");
+  let input = String(rateRaw).toLowerCase();
+  input = input.replace(/,/g, "");
+  while (/\d\s+\d{3}\b/.test(input)) {
+    input = input.replace(/(\d)\s+(\d{3}\b)/g, "$1$2");
+  }
   const matches = [...input.matchAll(/(\d+(?:\.\d+)?)\s*(k|thousand|lac|lakh)?/g)];
   const values = matches
     .map((match) => parseNumberWithUnits(`${match[1]} ${match[2] || ""}`))
