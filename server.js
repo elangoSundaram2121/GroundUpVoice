@@ -32,6 +32,8 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+const whisperLanguage = process.env.WHISPER_LANGUAGE || "en";
+
 const storage = multer.diskStorage({
   destination: (_req, _file, callback) => {
     callback(null, uploadsDir);
@@ -162,6 +164,7 @@ async function extractLogisticsData(transcript) {
         role: "system",
         content: [
           "Extract logistics details from the transcript.",
+          "The transcript may be in any language; still extract the fields.",
           "Return strict JSON only with these keys:",
           'from, to, commodity, truck_size_tons, loads, rate_raw',
           "No explanation. Missing values must be null."
@@ -299,7 +302,8 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
 
     const transcription = await client.audio.transcriptions.create({
       file: fs.createReadStream(req.file.path),
-      model: "whisper-1"
+      model: "whisper-1",
+      language: whisperLanguage
     });
 
     const transcriptText = (transcription.text || "").trim();
