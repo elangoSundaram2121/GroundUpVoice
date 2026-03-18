@@ -213,6 +213,70 @@ app.get("/records", (_req, res) => {
   }
 });
 
+function toNormalizedReport(record) {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  if (!record.normalized || typeof record.normalized !== "object") {
+    return null;
+  }
+
+  return {
+    timestamp: record.timestamp || null,
+    ...record.normalized
+  };
+}
+
+function isTodayLocal(isoTimestamp) {
+  if (!isoTimestamp) {
+    return false;
+  }
+
+  const date = new Date(isoTimestamp);
+
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  const now = new Date();
+
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+app.get("/reports", (_req, res) => {
+  try {
+    const records = safeReadTranscriptFile();
+    const reports = records.map(toNormalizedReport).filter(Boolean);
+    return res.json(reports);
+  } catch (error) {
+    console.error("Failed to read reports:", error);
+    return res.status(500).json({
+      error: "Failed to read reports."
+    });
+  }
+});
+
+app.get("/reports/today", (_req, res) => {
+  try {
+    const records = safeReadTranscriptFile();
+    const reports = records
+      .map(toNormalizedReport)
+      .filter(Boolean)
+      .filter((report) => isTodayLocal(report.timestamp));
+    return res.json(reports);
+  } catch (error) {
+    console.error("Failed to read today's reports:", error);
+    return res.status(500).json({
+      error: "Failed to read today's reports."
+    });
+  }
+});
+
 app.post("/upload", upload.single("audio"), async (req, res) => {
   console.log("Received /upload request");
 
