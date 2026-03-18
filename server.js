@@ -60,6 +60,147 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+function safeReadTranscriptFile() {
+  return JSON.parse(fs.readFileSync(transcriptFile, "utf8") || "[]");
+}
+
+function safeWriteTranscriptFile(records) {
+  fs.writeFileSync(transcriptFile, JSON.stringify(records, null, 2), "utf8");
+}
+
+function normalizeEmptyToNull(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+
+  return value;
+}
+
+function normalizeTextField(value) {
+  const cleaned = normalizeEmptyToNull(value);
+
+  if (cleaned === null) {
+    return null;
+  }
+
+  return String(cleaned).trim();
+}
+
+function parseNumberWithUnits(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  const input = String(value).toLowerCase().replace(/,/g, " ").trim();
+  const match = input.match(/(\d+(?:\.\d+)?)\s*(k|thousand|lac|lakh)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const numericValue = Number(match[1]);
+
+  if (!Number.isFinite(numericValue)) {
+    return null;
+  }
+
+  const unit = match[2];
+
+  if (unit === "k" || unit === "thousand") {
+    return Math.round(numericValue * 1000);
+  }
+
+  if (unit === "lac" || unit === "lakh") {
+    return Math.round(numericValue * 100000);
+  }
+
+  return Math.round(numericValue);
+}
+
+function extractRateRange(rateRaw) {
+  if (!rateRaw) {
+    return { rate_min: null, rate_max: null };
+  }
+
+  const input = String(rateRaw).toLowerCase().replace(/,/g, " ");
+  const matches = [...input.matchAll(/(\d+(?:\.\d+)?)\s*(k|thousand|lac|lakh)?/g)];
+  const values = matches
+    .map((match) => parseNumberWithUnits(`${match[1]} ${match[2] || ""}`))
+    .filter((value) => Number.isFinite(value));
+
+  if (!values.length) {
+    return { rate_min: null, rate_max: null };
+  }
+
+  if (values.length === 1) {
+    return {
+      rate_min: values[0],
+      rate_max: values[0]
+    };
+  }
+
+  return {
+    rate_min: Math.min(...values),
+    rate_max: Math.max(...values)
+  };
+}
+
+async function extractLogisticsData(transcript) {
+  const response = await client.chat.completions.create({
+    model: "gpt-4.1-mini",
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: [
+          "Extract logistics details from the transcript.",
+          "Return strict JSON only with these keys:",
+          'from, to, commodity, truck_size_tons, loads, rate_raw',
+          "No explanation. Missing values must be null."
+        ].join(" ")
+      },
+      {
+        role: "user",
+        content: transcript
+      }
+    ]
+  });
+
+  const content = response.choices[0]?.message?.content || "{}";
+  const parsed = JSON.parse(content);
+
+  return {
+    from: normalizeEmptyToNull(parsed.from),
+    to: normalizeEmptyToNull(parsed.to),
+    commodity: normalizeEmptyToNull(parsed.commodity),
+    truck_size_tons: normalizeEmptyToNull(parsed.truck_size_tons),
+    loads: normalizeEmptyToNull(parsed.loads),
+    rate_raw: normalizeEmptyToNull(parsed.rate_raw)
+  };
+}
+
+function normalizeData(data) {
+  const rateRange = extractRateRange(data.rate_raw);
+
+  return {
+    from: normalizeTextField(data.from),
+    to: normalizeTextField(data.to),
+    commodity: normalizeTextField(data.commodity),
+    truck_size_tons: parseNumberWithUnits(data.truck_size_tons),
+    loads: parseNumberWithUnits(data.loads),
+    rate_min: rateRange.rate_min,
+    rate_max: rateRange.rate_max
+  };
+}
+
 app.post("/upload", upload.single("audio"), async (req, res) => {
   console.log("Received /upload request");
 
@@ -89,7 +230,6 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     console.log("Transcription completed");
 
     return res.json({
-      success: true,
       transcript: transcriptText,
       audioFile: path.basename(req.file.path),
       originalName: req.file.originalname,
@@ -103,11 +243,11 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
   }
 });
 
-app.post("/submit", (req, res) => {
+app.post("/submit", async (req, res) => {
   console.log("Received /submit request");
 
   try {
-    const { audioFile, originalName, mimeType, transcript } = req.body || {};
+    const { audioFile, transcript } = req.body || {};
     const cleanedTranscript = String(transcript || "").trim();
 
     if (!audioFile || !cleanedTranscript) {
@@ -126,34 +266,36 @@ app.post("/submit", (req, res) => {
       });
     }
 
-    const existingTranscripts = JSON.parse(
-      fs.readFileSync(transcriptFile, "utf8") || "[]"
-    );
+    const extracted = await extractLogisticsData(cleanedTranscript);
+    console.log("Extraction completed");
 
-    const transcriptRecord = {
-      id: Date.now(),
-      createdAt: new Date().toISOString(),
-      audioFile: safeAudioFile,
-      originalName: originalName || safeAudioFile,
-      mimeType: mimeType || "application/octet-stream",
-      transcript: cleanedTranscript
+    const normalized = normalizeData(extracted);
+    console.log("Normalization completed");
+
+    const existingTranscripts = safeReadTranscriptFile();
+    const record = {
+      timestamp: new Date().toISOString(),
+      raw: {
+        audioFile: safeAudioFile,
+        transcript: cleanedTranscript
+      },
+      extracted,
+      normalized
     };
 
-    existingTranscripts.push(transcriptRecord);
-    fs.writeFileSync(
-      transcriptFile,
-      JSON.stringify(existingTranscripts, null, 2),
-      "utf8"
-    );
+    existingTranscripts.push(record);
+    safeWriteTranscriptFile(existingTranscripts);
+    console.log("Structured record saved");
 
     return res.json({
-      success: true,
-      message: "Report saved successfully."
+      transcript: cleanedTranscript,
+      extracted,
+      normalized
     });
   } catch (error) {
     console.error("Submit handler failed:", error);
     return res.status(500).json({
-      error: "Failed to save transcript."
+      error: "Failed to process submitted transcript."
     });
   }
 });
