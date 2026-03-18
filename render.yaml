@@ -10,7 +10,7 @@ services:
         sync: false
       - key: STORAGE_DIR
         value: /var/data/groundup-voice
-    disks:
-      - name: groundup-voice-data
-        mountPath: /var/data
-        sizeGB: 1
+    disk:
+      name: groundup-voice-data
+      mountPath: /var/data
+      sizeGB: 1
