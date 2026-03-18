@@ -45,6 +45,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+app.use(express.json());
+
 // Serve only the minimal frontend assets needed by the prototype.
 app.get("/", (_req, res) => {
   res.sendFile(indexFile);
@@ -86,6 +88,44 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     const transcriptText = (transcription.text || "").trim();
     console.log("Transcription completed");
 
+    return res.json({
+      success: true,
+      transcript: transcriptText,
+      audioFile: path.basename(req.file.path),
+      originalName: req.file.originalname,
+      mimeType: req.file.mimetype
+    });
+  } catch (error) {
+    console.error("Upload handler failed:", error);
+    return res.status(500).json({
+      error: "Failed to process audio transcription."
+    });
+  }
+});
+
+app.post("/submit", (req, res) => {
+  console.log("Received /submit request");
+
+  try {
+    const { audioFile, originalName, mimeType, transcript } = req.body || {};
+    const cleanedTranscript = String(transcript || "").trim();
+
+    if (!audioFile || !cleanedTranscript) {
+      return res.status(400).json({
+        error: "Audio file and transcript are required."
+      });
+    }
+
+    const safeAudioFile = path.basename(audioFile);
+    const storedAudioPath = path.join(uploadsDir, safeAudioFile);
+
+    if (!fs.existsSync(storedAudioPath)) {
+      console.error("Uploaded audio file not found:", storedAudioPath);
+      return res.status(400).json({
+        error: "Uploaded audio file could not be found."
+      });
+    }
+
     const existingTranscripts = JSON.parse(
       fs.readFileSync(transcriptFile, "utf8") || "[]"
     );
@@ -93,10 +133,10 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     const transcriptRecord = {
       id: Date.now(),
       createdAt: new Date().toISOString(),
-      audioFile: path.basename(req.file.path),
-      originalName: req.file.originalname,
-      mimeType: req.file.mimetype,
-      transcript: transcriptText
+      audioFile: safeAudioFile,
+      originalName: originalName || safeAudioFile,
+      mimeType: mimeType || "application/octet-stream",
+      transcript: cleanedTranscript
     };
 
     existingTranscripts.push(transcriptRecord);
@@ -108,12 +148,12 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
 
     return res.json({
       success: true,
-      transcript: transcriptText
+      message: "Report saved successfully."
     });
   } catch (error) {
-    console.error("Upload handler failed:", error);
+    console.error("Submit handler failed:", error);
     return res.status(500).json({
-      error: "Failed to process audio transcription."
+      error: "Failed to save transcript."
     });
   }
 });

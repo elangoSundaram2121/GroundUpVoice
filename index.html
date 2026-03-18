@@ -84,13 +84,29 @@
     }
 
     .transcript-box {
+      width: 100%;
       min-height: 160px;
       padding: 14px;
       border-radius: 12px;
       background: #f4f7fb;
       border: 1px solid #d8e0ec;
-      white-space: pre-wrap;
+      resize: vertical;
+      font: inherit;
+      color: inherit;
       line-height: 1.5;
+    }
+
+    .hint {
+      margin: 10px 0 16px;
+      color: #53627c;
+      font-size: 0.95rem;
+      line-height: 1.4;
+    }
+
+    #submitBtn {
+      background: #1b8a3d;
+      color: #ffffff;
+      margin-top: 4px;
     }
 
     @media (max-width: 480px) {
@@ -107,7 +123,7 @@
 <body>
   <main class="container">
     <h1>GroundUp Voice Reporter</h1>
-    <p class="subtitle">Record a short voice message, upload it, and view the transcript.</p>
+    <p class="subtitle">Record a short voice message, review the transcript, edit it if needed, and then submit.</p>
 
     <section class="panel">
       <div class="button-row">
@@ -117,7 +133,16 @@
 
       <p id="status" class="status">Status: Ready to record</p>
 
-      <div id="transcript" class="transcript-box">Transcript will appear here after processing.</div>
+      <textarea
+        id="transcript"
+        class="transcript-box"
+        placeholder="Transcript will appear here after processing."
+        disabled
+      ></textarea>
+
+      <p class="hint">After transcription, you can edit the text before saving it.</p>
+
+      <button id="submitBtn" type="button" disabled>Submit</button>
     </section>
   </main>
 

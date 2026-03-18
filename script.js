@@ -1,11 +1,13 @@
 const recordButton = document.getElementById("recordBtn");
 const stopButton = document.getElementById("stopBtn");
+const submitButton = document.getElementById("submitBtn");
 const statusText = document.getElementById("status");
 const transcriptBox = document.getElementById("transcript");
 
 let mediaRecorder = null;
 let mediaStream = null;
 let audioChunks = [];
+let pendingSubmission = null;
 
 function setStatus(message) {
   statusText.textContent = `Status: ${message}`;
@@ -49,6 +51,19 @@ function stopTracks() {
   mediaStream = null;
 }
 
+function resetPendingSubmission() {
+  pendingSubmission = null;
+  transcriptBox.value = "";
+  transcriptBox.disabled = true;
+  submitButton.disabled = true;
+}
+
+function updateSubmitButtonState() {
+  const hasPendingUpload = Boolean(pendingSubmission && pendingSubmission.audioFile);
+  const hasTranscriptText = transcriptBox.value.trim().length > 0;
+  submitButton.disabled = !(hasPendingUpload && hasTranscriptText);
+}
+
 // Upload the finished recording to the server for Whisper transcription.
 async function uploadRecording(audioBlob, extension) {
   const formData = new FormData();
@@ -57,7 +72,10 @@ async function uploadRecording(audioBlob, extension) {
   formData.append("audio", audioBlob, fileName);
 
   setStatus("Uploading audio...");
-  transcriptBox.textContent = "Processing transcription...";
+  transcriptBox.value = "";
+  transcriptBox.placeholder = "Processing transcription...";
+  transcriptBox.disabled = true;
+  submitButton.disabled = true;
 
   const response = await fetch("/upload", {
     method: "POST",
@@ -71,8 +89,67 @@ async function uploadRecording(audioBlob, extension) {
   }
 
   console.log("Upload successful:", result);
-  transcriptBox.textContent = result.transcript || "No transcript returned.";
-  setStatus("Transcript ready");
+  pendingSubmission = {
+    audioFile: result.audioFile,
+    originalName: result.originalName,
+    mimeType: result.mimeType
+  };
+  transcriptBox.disabled = false;
+  transcriptBox.value = result.transcript || "";
+  transcriptBox.placeholder = "Edit the transcript if needed before submitting.";
+  updateSubmitButtonState();
+  setStatus("Review transcript and tap Submit");
+}
+
+// Save the reviewed transcript only after the user confirms it.
+async function submitTranscript() {
+  if (!pendingSubmission || !pendingSubmission.audioFile) {
+    setStatus("Record audio first");
+    return;
+  }
+
+  const transcript = transcriptBox.value.trim();
+
+  if (!transcript) {
+    setStatus("Transcript cannot be empty");
+    updateSubmitButtonState();
+    return;
+  }
+
+  try {
+    submitButton.disabled = true;
+    setStatus("Submitting report...");
+
+    const response = await fetch("/submit", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        audioFile: pendingSubmission.audioFile,
+        originalName: pendingSubmission.originalName,
+        mimeType: pendingSubmission.mimeType,
+        transcript
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Submit failed.");
+    }
+
+    console.log("Submit successful:", result);
+    transcriptBox.value = transcript;
+    transcriptBox.disabled = true;
+    pendingSubmission = null;
+    submitButton.disabled = true;
+    setStatus("Report submitted successfully");
+  } catch (error) {
+    console.error("Submit error:", error);
+    setStatus(error.message || "Submit failed");
+    updateSubmitButtonState();
+  }
 }
 
 // Start microphone capture and buffer the audio until the user stops recording.
@@ -83,7 +160,8 @@ async function startRecording() {
   }
 
   try {
-    transcriptBox.textContent = "Transcript will appear here after processing.";
+    resetPendingSubmission();
+    transcriptBox.placeholder = "Transcript will appear here after processing.";
     setStatus("Requesting microphone access...");
 
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -115,7 +193,8 @@ async function startRecording() {
         await uploadRecording(audioBlob, extension);
       } catch (error) {
         console.error("Upload/transcription error:", error);
-        transcriptBox.textContent = "Unable to process recording.";
+        resetPendingSubmission();
+        transcriptBox.placeholder = "Unable to process recording.";
         setStatus(error.message || "Processing failed");
       } finally {
         stopTracks();
@@ -148,3 +227,5 @@ function stopRecording() {
 
 recordButton.addEventListener("click", startRecording);
 stopButton.addEventListener("click", stopRecording);
+submitButton.addEventListener("click", submitTranscript);
+transcriptBox.addEventListener("input", updateSubmitButtonState);
