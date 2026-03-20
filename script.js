@@ -53,15 +53,12 @@ function stopTracks() {
 
 function resetPendingSubmission() {
   pendingSubmission = null;
-  transcriptBox.value = "";
-  transcriptBox.disabled = true;
-  submitButton.disabled = true;
+  updateSubmitButtonState();
 }
 
 function updateSubmitButtonState() {
-  const hasPendingUpload = Boolean(pendingSubmission && pendingSubmission.audioFile);
   const hasTranscriptText = transcriptBox.value.trim().length > 0;
-  submitButton.disabled = !(hasPendingUpload && hasTranscriptText);
+  submitButton.disabled = !hasTranscriptText;
 }
 
 // Upload the finished recording to the server for Whisper transcription.
@@ -72,9 +69,7 @@ async function uploadRecording(audioBlob, extension) {
   formData.append("audio", audioBlob, fileName);
 
   setStatus("Uploading audio...");
-  transcriptBox.value = "";
   transcriptBox.placeholder = "Processing transcription...";
-  transcriptBox.disabled = true;
   submitButton.disabled = true;
 
   const response = await fetch("/upload", {
@@ -94,7 +89,6 @@ async function uploadRecording(audioBlob, extension) {
     originalName: result.originalName,
     mimeType: result.mimeType
   };
-  transcriptBox.disabled = false;
   transcriptBox.value = result.transcript || "";
   transcriptBox.placeholder = "Edit the transcript if needed before submitting.";
   updateSubmitButtonState();
@@ -103,11 +97,6 @@ async function uploadRecording(audioBlob, extension) {
 
 // Save the reviewed transcript only after the user confirms it.
 async function submitTranscript() {
-  if (!pendingSubmission || !pendingSubmission.audioFile) {
-    setStatus("Record audio first");
-    return;
-  }
-
   const transcript = transcriptBox.value.trim();
 
   if (!transcript) {
@@ -126,9 +115,9 @@ async function submitTranscript() {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        audioFile: pendingSubmission.audioFile,
-        originalName: pendingSubmission.originalName,
-        mimeType: pendingSubmission.mimeType,
+        audioFile: pendingSubmission?.audioFile || "",
+        originalName: pendingSubmission?.originalName || "",
+        mimeType: pendingSubmission?.mimeType || "",
         transcript
       })
     });
@@ -141,7 +130,6 @@ async function submitTranscript() {
 
     console.log("Submit successful:", result);
     transcriptBox.value = transcript;
-    transcriptBox.disabled = true;
     pendingSubmission = null;
     submitButton.disabled = true;
     setStatus("Report submitted successfully");
@@ -161,7 +149,7 @@ async function startRecording() {
 
   try {
     resetPendingSubmission();
-    transcriptBox.placeholder = "Transcript will appear here after processing.";
+    transcriptBox.placeholder = "Type your report here, or record audio to fill this automatically.";
     setStatus("Requesting microphone access...");
 
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -194,7 +182,7 @@ async function startRecording() {
       } catch (error) {
         console.error("Upload/transcription error:", error);
         resetPendingSubmission();
-        transcriptBox.placeholder = "Unable to process recording.";
+        transcriptBox.placeholder = "Type your report here, or record audio to fill this automatically.";
         setStatus(error.message || "Processing failed");
       } finally {
         stopTracks();

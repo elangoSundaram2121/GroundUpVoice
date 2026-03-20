@@ -92,6 +92,127 @@ function normalizeTextField(value) {
   return String(cleaned).trim();
 }
 
+function createEmptyContext() {
+  return {
+    departure_time: "",
+    arrival_estimate: "",
+    notes: "",
+    signals: []
+  };
+}
+
+function normalizeSignalList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function normalizeExtractedContext(value) {
+  if (!value || typeof value !== "object") {
+    return createEmptyContext();
+  }
+
+  return {
+    departure_time: normalizeTextField(value.departure_time) || "",
+    arrival_estimate: normalizeTextField(value.arrival_estimate) || "",
+    notes: normalizeTextField(value.notes) || "",
+    signals: normalizeSignalList(value.signals)
+  };
+}
+
+function normalizeClockTime(value) {
+  const cleaned = normalizeTextField(value);
+
+  if (!cleaned) {
+    return "";
+  }
+
+  const input = cleaned
+    .toLowerCase()
+    .replace(/[.,]/g, " ")
+    .replace(/\b(around|about|approximately|approx|at|by)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const twentyFourHourMatch = input.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+
+  if (twentyFourHourMatch) {
+    return `${String(Number(twentyFourHourMatch[1])).padStart(2, "0")}:${twentyFourHourMatch[2]}`;
+  }
+
+  const twelveHourMatch = input.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/);
+
+  if (!twelveHourMatch) {
+    return cleaned;
+  }
+
+  let hours = Number(twelveHourMatch[1]);
+  const minutes = twelveHourMatch[2] || "00";
+  const meridiem = twelveHourMatch[3];
+
+  if (!Number.isInteger(hours) || hours < 1 || hours > 12) {
+    return cleaned;
+  }
+
+  if (meridiem === "am") {
+    hours = hours === 12 ? 0 : hours;
+  } else {
+    hours = hours === 12 ? 12 : hours + 12;
+  }
+
+  return `${String(hours).padStart(2, "0")}:${minutes}`;
+}
+
+function normalizeArrivalEstimate(value) {
+  const cleaned = normalizeTextField(value);
+
+  if (!cleaned) {
+    return "";
+  }
+
+  const input = cleaned
+    .toLowerCase()
+    .replace(/[.,]/g, " ")
+    .replace(/\b(by|around|about|approximately|approx)\b/g, " ")
+    .replace(/\b(will\s+)?(reach|reaching|arrive|arriving|arrival)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/\btomorrow\b/.test(input) && /\bmorning\b/.test(input)) {
+    return "next_day_morning";
+  }
+
+  if (/\btomorrow\b/.test(input) && /\bafternoon\b/.test(input)) {
+    return "next_day_afternoon";
+  }
+
+  if (/\btomorrow\b/.test(input) && /\bevening\b/.test(input)) {
+    return "next_day_evening";
+  }
+
+  if (/\btomorrow\b/.test(input) && /\bnight\b/.test(input)) {
+    return "next_day_night";
+  }
+
+  const normalizedTime = normalizeClockTime(cleaned);
+  return normalizedTime || cleaned;
+}
+
+function normalizeContext(context) {
+  const extractedContext = normalizeExtractedContext(context);
+
+  return {
+    departure_time: normalizeClockTime(extractedContext.departure_time),
+    arrival_estimate: normalizeArrivalEstimate(extractedContext.arrival_estimate),
+    signals: extractedContext.signals,
+    notes: extractedContext.notes
+  };
+}
+
 function parseNumberWithUnits(value) {
   if (value === null || value === undefined) {
     return null;
@@ -174,8 +295,18 @@ async function extractLogisticsData(transcript) {
           "Extract logistics details from the transcript.",
           "The transcript may be in any language; still extract the fields.",
           "Return strict JSON only with these keys:",
-          'from, to, commodity, truck_size_tons, loads, rate_raw',
-          "No explanation. Missing values must be null."
+          'from, to, commodity, truck_size_tons, loads, rate_raw, context',
+          "context must be an object with these keys:",
+          'departure_time, arrival_estimate, notes, signals',
+          "Keep the existing extraction behavior for the top-level fields.",
+          "Only extract values that are clearly stated in the transcript.",
+          "Do not infer or guess missing values.",
+          "Top-level missing scalar values must be null.",
+          "For missing context strings, return an empty string.",
+          "For missing signals, return an empty array.",
+          'signals must only contain clearly stated labels such as "driver_shortage", "truck_shortage", or "delayed_loads".',
+          "notes should contain only additional useful logistics context not already captured elsewhere; otherwise return an empty string.",
+          "No explanation."
         ].join(" ")
       },
       {
@@ -194,7 +325,8 @@ async function extractLogisticsData(transcript) {
     commodity: normalizeEmptyToNull(parsed.commodity),
     truck_size_tons: normalizeEmptyToNull(parsed.truck_size_tons),
     loads: normalizeEmptyToNull(parsed.loads),
-    rate_raw: normalizeEmptyToNull(parsed.rate_raw)
+    rate_raw: normalizeEmptyToNull(parsed.rate_raw),
+    context: normalizeExtractedContext(parsed.context)
   };
 }
 
@@ -208,7 +340,8 @@ function normalizeData(data) {
     truck_size_tons: parseNumberWithUnits(data.truck_size_tons),
     loads: parseNumberWithUnits(data.loads),
     rate_min: rateRange.rate_min,
-    rate_max: rateRange.rate_max
+    rate_max: rateRange.rate_max,
+    context: normalizeContext(data.context)
   };
 }
 
@@ -337,21 +470,23 @@ app.post("/submit", async (req, res) => {
   try {
     const { audioFile, transcript } = req.body || {};
     const cleanedTranscript = String(transcript || "").trim();
+    const safeAudioFile = audioFile ? path.basename(audioFile) : "";
 
-    if (!audioFile || !cleanedTranscript) {
+    if (!cleanedTranscript) {
       return res.status(400).json({
-        error: "Audio file and transcript are required."
+        error: "Transcript is required."
       });
     }
 
-    const safeAudioFile = path.basename(audioFile);
-    const storedAudioPath = path.join(uploadsDir, safeAudioFile);
+    if (safeAudioFile) {
+      const storedAudioPath = path.join(uploadsDir, safeAudioFile);
 
-    if (!fs.existsSync(storedAudioPath)) {
-      console.error("Uploaded audio file not found:", storedAudioPath);
-      return res.status(400).json({
-        error: "Uploaded audio file could not be found."
-      });
+      if (!fs.existsSync(storedAudioPath)) {
+        console.error("Uploaded audio file not found:", storedAudioPath);
+        return res.status(400).json({
+          error: "Uploaded audio file could not be found."
+        });
+      }
     }
 
     const extracted = await extractLogisticsData(cleanedTranscript);
@@ -377,7 +512,6 @@ app.post("/submit", async (req, res) => {
 
     return res.json({
       transcript: cleanedTranscript,
-      extracted,
       normalized
     });
   } catch (error) {
